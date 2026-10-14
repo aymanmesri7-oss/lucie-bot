@@ -6,16 +6,28 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const commands = [
   new SlashCommandBuilder()
     .setName('send')
-    .setDescription('Envoyer un message dans un salon')
+    .setDescription('Envoyer un message stylé dans un salon')
     .addStringOption(option =>
       option.setName('message')
         .setDescription('Le message à envoyer')
         .setRequired(true))
     .addChannelOption(option =>
       option.setName('salon')
-        .setDescription('Le salon où envoyer le message')
+        .setDescription('Le salon où envoyer')
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true))
+    .addStringOption(option =>
+      option.setName('couleur')
+        .setDescription('Couleur de la barre (optionnel)')
+        .setRequired(false)
+        .addChoices(
+          { name: '🟢 Vert', value: '#2ecc71' },
+          { name: '🔵 Bleu', value: '#3498db' },
+          { name: '🟡 Jaune', value: '#f1c40f' },
+          { name: '🔴 Rouge', value: '#e74c3c' },
+          { name: '🟣 Violet', value: '#9b59b6' },
+          { name: '🟠 Orange', value: '#e67e22' }
+        ))
     .toJSON()
 ];
 

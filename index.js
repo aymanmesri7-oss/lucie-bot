@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 
 const client = new Client({
   intents: [
@@ -16,16 +16,21 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === 'send') {
-    // Vérifier que c'est un admin / modérateur
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
       return interaction.reply({ content: '❌ Tu n\'as pas la permission.', ephemeral: true });
     }
 
     const message = interaction.options.getString('message');
     const channel = interaction.options.getChannel('salon');
+    const couleur = interaction.options.getString('couleur') || '#2ecc71';
+
+    const embed = new EmbedBuilder()
+      .setDescription(message)
+      .setColor(couleur)
+      .setFooter({ text: 'Kyce Agency' });
 
     try {
-      await channel.send(message);
+      await channel.send({ embeds: [embed] });
       await interaction.reply({ content: `✅ Message envoyé dans ${channel}`, ephemeral: true });
     } catch (error) {
       console.error(error);
