@@ -28,6 +28,10 @@ const commands = [
           { name: '🟣 Violet', value: '#9b59b6' },
           { name: '🟠 Orange', value: '#e67e22' }
         ))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('recruteur')
+    .setDescription('Poster le message "Devenir recruteur" avec le bouton')
     .toJSON()
 ];
 
