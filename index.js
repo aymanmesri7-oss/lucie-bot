@@ -64,6 +64,9 @@ const NEW_PERSO_CATEGORY_ID = '1562941117261942934';
 const NEW_AUTO_ROLE_ID = '1563150512000471040';
 const NEW_WELCOME_CHANNEL_ID = '1563123616433053696';
 
+// === CONFIG SERVEUR HALO AGENCY ===
+const HALO_GUILD_ID = '1566540447487099041';
+
 // === TRACKING RECRUTEURS ===
 // Volume Railway monté sur /data → le fichier survit aux mises à jour
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
@@ -185,6 +188,12 @@ client.once('ready', async () => {
     await client.application.commands.create({ name, description, default_member_permissions: String(PermissionFlagsBits.ManageChannels) })
       .catch(e => console.error(`Erreur commande ${name}:`, e.message));
   }
+
+  await client.application.commands.create({
+    name: 'supprimer-salons',
+    description: 'HALO AGENCY : supprimer tous les salons perso et leurs catégories',
+    default_member_permissions: String(PermissionFlagsBits.Administrator)
+  }).catch(e => console.error('Erreur commande supprimer-salons:', e.message));
 
   // Rien d'automatique au démarrage — salons créés uniquement quand un nouveau membre rejoint
   console.log('Bot prêt.');
@@ -495,6 +504,61 @@ client.on('interactionCreate', async interaction => {
     await interaction.editReply({
       content: `✅ **${deleted} doublons supprimés !**${deleted > 0 ? '\n\nSupprimés : ' + deletedNames.join(', ') : '\n\nAucun doublon trouvé.'}`
     });
+  }
+
+  // ==================
+  // /supprimer-salons → aperçu, puis suppression après clic sur le bouton
+  // ==================
+  const purgeCmd = interaction.isChatInputCommand() && interaction.commandName === 'supprimer-salons';
+  const purgeBtn = interaction.isButton() && interaction.customId === 'confirm_supprimer_salons';
+  if (purgeCmd || purgeBtn) {
+    // La commande apparaît sur tous les serveurs de Lucie : elle ne doit agir que sur HALO AGENCY
+    if (interaction.guild?.id !== HALO_GUILD_ID || !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: '❌ Commande réservée aux admins de HALO AGENCY.', ephemeral: true });
+    }
+
+    if (purgeCmd) await interaction.deferReply({ ephemeral: true });
+    else await interaction.update({ content: '⏳ Suppression en cours...', components: [] });
+
+    const guild = interaction.guild;
+    await guild.channels.fetch();
+    const catIds = getPersoCategoryIds(guild);
+    const categories = [...guild.channels.cache.filter(c => catIds.includes(c.id)).values()];
+    const salons = [...guild.channels.cache.filter(c => catIds.includes(c.parentId)).values()];
+
+    if (purgeCmd) {
+      if (!categories.length) return interaction.editReply({ content: 'Aucune catégorie "SALON PERSO" trouvée.' });
+      const button = new ButtonBuilder()
+        .setCustomId('confirm_supprimer_salons')
+        .setLabel(`Supprimer ${salons.length} salons`)
+        .setStyle(ButtonStyle.Danger);
+      return interaction.editReply({
+        content:
+          `⚠️ **${salons.length} salons** et **${categories.length} catégories** vont être supprimés :\n` +
+          categories.map(c => `• ${c.name}`).join('\n') +
+          `\n\n**C'est définitif.** Pour annuler, ne clique pas.`,
+        components: [new ActionRowBuilder().addComponents(button)]
+      });
+    }
+
+    let supprimes = 0, erreurs = 0;
+    for (const salon of [...salons, ...categories]) {
+      // Si un salon a échoué, on garde les catégories pour pouvoir relancer la commande
+      if (salon.type === ChannelType.GuildCategory && erreurs) continue;
+      try {
+        await salon.delete('Supprimé par /supprimer-salons');
+        supprimes++;
+        await new Promise(r => setTimeout(r, 1000));
+      } catch (e) {
+        erreurs++;
+        console.error(`Erreur suppression ${salon.name}:`, e.message);
+      }
+    }
+
+    console.log(`/supprimer-salons : ${supprimes} supprimés, ${erreurs} erreurs`);
+    await interaction.editReply({
+      content: `✅ **${supprimes}** salons et catégories supprimés` + (erreurs ? `\n⚠️ ${erreurs} erreurs : relance la commande (voir logs Railway)` : '')
+    }).catch(() => {}); // le salon de la commande a pu être supprimé
   }
 
   // ==================
