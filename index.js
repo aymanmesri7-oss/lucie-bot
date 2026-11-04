@@ -24,7 +24,7 @@ const COMEBACK_GUILD_ID = '1566758699685515285';
 // === SAUVEGARDE ===
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DATA_FILE = path.join(DATA_DIR, 'parrainage.json');
-const primePour = guildId => 0.5;
+const primePour = guildId => 2; // 2$ par personne invitée
 
 function loadData() {
   try {
@@ -40,8 +40,8 @@ function saveData(data) {
 // Config recruteur du serveur (réglée avec /setuprecruteur)
 const getRecruConf = guildId => loadData().salons[guildId]?.recru;
 
-function statsParrain(data, parrainId) {
-  const mine = data.invites.filter(i => i.parrain === parrainId);
+function statsParrain(data, parrainId, guildId) {
+  const mine = data.invites.filter(i => i.parrain === parrainId && i.guildId === guildId);
   return { count: mine.length, gains: mine.reduce((t, i) => t + i.gain, 0) };
 }
 
@@ -89,12 +89,45 @@ async function updateClassementParrainage(guild, data) {
   else { const msg = await salon.send({ embeds: [embed] }); conf.classementMsg = msg.id; saveData(data); }
 }
 
+// Bouton "Mes parrainages"
+const boutonParrainages = () => new ActionRowBuilder().addComponents(
+  new ButtonBuilder().setCustomId('mes_parrainages').setLabel('📊 Voir qui j\'ai invité').setStyle(ButtonStyle.Primary)
+);
+
+// Stats perso + top 10 du serveur
+function embedMesParrainages(guild, userId) {
+  const data = loadData();
+  const PRIME = primePour(guild.id);
+  const scores = {};
+  for (const i of data.invites.filter(i => i.guildId === guild.id)) scores[i.parrain] = (scores[i.parrain] || 0) + 1;
+  const classement = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+  const pos = classement.findIndex(([id]) => id === userId) + 1;
+  const mine = data.invites.filter(i => i.parrain === userId && i.guildId === guild.id);
+  const medailles = ['🥇', '🥈', '🥉'];
+  const top = classement.slice(0, 10).map(([id, n], idx) =>
+    `${medailles[idx] || `**${idx + 1}.**`} <@${id}> — **${n}** invité${n > 1 ? 's' : ''}${id === userId ? ' ⬅️ toi' : ''}`
+  );
+
+  return new EmbedBuilder()
+    .setTitle('📊 Tes parrainages')
+    .setDescription(
+      `👥 Personnes invitées : **${mine.length}**\n` +
+      `💰 Gains : **${(mine.length * PRIME).toFixed(2)}$**\n` +
+      `📍 Position : **${pos ? `#${pos}` : 'pas encore classé'}**\n\n` +
+      (mine.length ? `**👀 Qui tu as invité :**\n${mine.slice(-100).map(i => `<@${i.va}>`).join(', ')}\n\n` : '*Tu n\'as encore invité personne.*\n\n') +
+      `━━━━━━━━━━━━━━━━━━━━━━\n🏆 **TOP 10**\n` +
+      (top.length ? top.join('\n') : '*Personne pour l\'instant… sois le premier !*')
+    )
+    .setColor('#f1c40f');
+}
+
 // === COMMANDES ===
 const COMMANDES = [
   { name: 'setupprime', description: 'Les primes de parrainage seront envoyées dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
   { name: 'setupclassement', description: 'Installer le classement parrainage dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
   { name: 'setup', description: 'Créer les salons perso et donner le rôle à tous les membres', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
-  { name: 'recruteur', description: 'Poster le message "Devenir recruteur" dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
+  { name: 'setupparrainages', description: 'Poster le bouton "Voir qui j\'ai invité" dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
+  { name: 'recruteur', description:'Poster le message "Devenir recruteur" dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
   {
     name: 'setuprecruteur',
     description: 'Régler le système recruteur de ce serveur',
@@ -370,7 +403,7 @@ client.on('interactionCreate', async interaction => {
       .setDescription(
         '🎯 **Deviens recruteur !**\n\n' +
         'Tu veux **gagner de l\'argent** en ramenant des VA ?\n\n' +
-        '💰 **0,50$** par VA ramené · **+2$** si ton VA est bon (s\'il produit)\n' +
+        '💰 **2$** par personne invitée\n' +
         'Aucun plafond — plus t\'en ramènes, plus tu gagnes.\n\n' +
         '👇 Clique pour commencer !'
       )
@@ -387,15 +420,14 @@ client.on('interactionCreate', async interaction => {
     const config = getRecruConf(guild.id);
     if (!config) return interaction.reply({ content: '❌ Système pas encore réglé, préviens un admin.', ephemeral: true });
 
-    if (member.roles.cache.has(config.roleId)) {
-      return interaction.reply({ content: '⚠️ Tu es déjà recruteur !', ephemeral: true });
+    const dejaSalon = guild.channels.cache.find(c => c.parentId === config.categoryId && c.permissionOverwrites.cache.has(member.id));
+    if (dejaSalon || member.roles.cache.has(config.roleId)) {
+      return interaction.reply({ content: `⚠️ Tu es déjà recruteur !${dejaSalon ? ` Ton salon : ${dejaSalon}` : ''}`, ephemeral: true });
     }
 
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      await member.roles.add(config.roleId);
-
       const newChannel = await guild.channels.create({
         name: `🎯-${member.user.username}`,
         type: ChannelType.GuildText,
@@ -412,17 +444,21 @@ client.on('interactionCreate', async interaction => {
           `👋 **Bienvenue ${member} !**\n\n` +
           `Tu es maintenant **recruteur** 🎯\n\n` +
           `Ton job : **ramener des VA via Telegram**\n\n` +
-          `💰 **0,50$** par VA ramené · **+2$** si ton VA est bon\n` +
+          `💰 **2$** par personne invitée\n` +
           `Aucun plafond — plus t'en ramènes, plus tu gagnes.`
         )
         .setColor('#2ecc71');
       const btn1 = new ButtonBuilder().setCustomId('recru_step2').setLabel('C\'est parti ✅').setStyle(ButtonStyle.Success);
 
       await newChannel.send({ embeds: [embed1], components: [new ActionRowBuilder().addComponents(btn1)] });
+
+      // Le rôle après le salon : si le rôle bloque, la personne a quand même son salon
+      await member.roles.add(config.roleId).catch(e => console.error('Erreur rôle recruteur:', e.message));
+
       await interaction.editReply({ content: `✅ T'es recruteur ! Ton salon perso : ${newChannel}` });
     } catch (error) {
       console.error('Erreur recruteur:', error.message);
-      await interaction.editReply({ content: '❌ Erreur, contacte un admin.' });
+      await interaction.editReply({ content: `❌ Erreur : ${error.message}\n\n👉 Vérifie que Lucie a la permission **Gérer les salons** et **Gérer les rôles**, et que son rôle est **au-dessus** du rôle recruteur.` });
     }
   }
 
@@ -479,11 +515,29 @@ client.on('interactionCreate', async interaction => {
         `2️⃣ **Copie ton annonce** → <#${conf.annoncesId}>\n` +
         `3️⃣ **Poste-la** dans les groupes → <#${conf.groupesId}> (Facebook + Telegram)\n` +
         `4️⃣ Dis à chaque VA de mettre **ton nom** dans le salon **qui-t-a-invité**\n\n` +
-        `💰 Chaque VA ramené = **0,50$** (+2$ s'il produit) · aucun plafond\n\n` +
+        `💰 Chaque personne invitée = **2$** · aucun plafond\n\n` +
         `**Ramène du monde, encaisse. Let's go 🔥**`
       )
       .setColor('#f1c40f');
-    await interaction.channel.send({ embeds: [finalEmbed] });
+    await interaction.channel.send({ embeds: [finalEmbed], components: [boutonParrainages()] });
+  }
+
+  // /setupparrainages → panneau avec le bouton dans ce salon
+  if (interaction.isChatInputCommand() && interaction.commandName === 'setupparrainages') {
+    await interaction.channel.send({ embeds: [new EmbedBuilder()
+      .setTitle('📊 TES PARRAINAGES')
+      .setDescription(
+        `Clique sur le bouton pour voir :\n\n` +
+        `👀 **Qui tu as invité**\n💰 **Combien tu as gagné**\n📍 **Ta place** dans le classement\n🏆 **Le top 10**\n\n` +
+        `💸 **${primePour(interaction.guild.id)}$** par personne invitée · aucun plafond`
+      )
+      .setColor('#f1c40f')], components: [boutonParrainages()] });
+    return interaction.reply({ content: '✅ Bouton posté !', ephemeral: true });
+  }
+
+  // Bouton "Voir qui j'ai invité"
+  if (interaction.isButton() && interaction.customId === 'mes_parrainages') {
+    return interaction.reply({ embeds: [embedMesParrainages(interaction.guild, interaction.user.id)], ephemeral: true });
   }
 
   // /invite
@@ -519,7 +573,7 @@ client.on('interactionCreate', async interaction => {
     const PRIME = primePour(guild.id);
     data.invites.push({ va: va.id, parrain: parrain.id, guildId: guild.id, gain: PRIME, at: new Date().toISOString() });
     saveData(data);
-    const { count, gains } = statsParrain(data, parrain.id);
+    const { count, gains } = statsParrain(data, parrain.id, guild.id);
 
     await interaction.update({ content: `✅ **${parrain.username}** a été notifié ! Merci 🤝`, components: [] });
 
@@ -528,7 +582,7 @@ client.on('interactionCreate', async interaction => {
       if (salonPerso) {
         await salonPerso.send({ content: `<@${parrain.id}>`, embeds: [new EmbedBuilder()
           .setDescription(`🎉 **${va} t'a désigné comme parrain !**\n\n💰 **+${PRIME}$** pour toi\n\n📊 **Ton total :**\n• Personnes invitées : **${count}**\n• Gains : **${gains.toFixed(2)}$**\n\n🔥 Continue, chaque personne = **${PRIME}$** de plus !`)
-          .setColor('#2ecc71')] });
+          .setColor('#2ecc71'), embedMesParrainages(salonPerso.guild, parrain.id)], components: [boutonParrainages()] });
       }
     } catch (e) { console.error('Erreur notif parrain:', e.message); }
 
