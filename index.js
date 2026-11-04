@@ -5,27 +5,23 @@ const {
   ButtonStyle, ChannelType, PermissionsBitField,
   UserSelectMenuBuilder
 } = require('discord.js');
-const { joinVoiceChannel, VoiceConnectionStatus } = require('@discordjs/voice');
 const fs = require('fs');
 const path = require('path');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildVoiceStates
+    GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers
   ]
 });
 
 const pendingMessages = new Map();
 
-// === CONFIG SERVEUR HALO AGENCY ===
+// === SERVEURS SALONS PERSO ===
 const HALO_GUILD_ID = '1566540447487099041';
-
-// === CONFIG SERVEUR INSTAGRAM COME BACK ===
 const COMEBACK_GUILD_ID = '1566758699685515285';
 
-// === TRACKING RECRUTEURS ===
+// === SAUVEGARDE ===
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DATA_FILE = path.join(DATA_DIR, 'parrainage.json');
 const primePour = guildId => 0.5;
@@ -37,15 +33,24 @@ function loadData() {
   return { invites: [], salons: {} };
 }
 
+function saveData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+// Config recruteur du serveur (réglée avec /setuprecruteur)
+const getRecruConf = guildId => loadData().salons[guildId]?.recru;
+
 function statsParrain(data, parrainId) {
   const mine = data.invites.filter(i => i.parrain === parrainId);
   return { count: mine.length, gains: mine.reduce((t, i) => t + i.gain, 0) };
 }
 
+// Salon perso OU salon recruteur du parrain, sur n'importe quel serveur
 async function findSalonParrain(guildActuel, parrainId) {
   const guilds = [guildActuel, ...client.guilds.cache.filter(g => g.id !== guildActuel.id).values()];
   for (const g of guilds) {
-    const catIds = getPersoConf(g.id) ? getPersoCategoryIds(g) : [];
+    const recru = getRecruConf(g.id);
+    const catIds = [...(getPersoConf(g.id) ? getPersoCategoryIds(g) : []), ...(recru ? [recru.categoryId] : [])];
     const salon = g.channels.cache.find(c =>
       c.type === ChannelType.GuildText && catIds.includes(c.parentId) && c.permissionOverwrites.cache.has(parrainId)
     );
@@ -84,23 +89,25 @@ async function updateClassementParrainage(guild, data) {
   else { const msg = await salon.send({ embeds: [embed] }); conf.classementMsg = msg.id; saveData(data); }
 }
 
-function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-client.once('ready', async () => {
-  console.log(`Bot connecté en tant que ${client.user.tag}`);
-
-  for (const [name, description] of [
-    ['setupprime', 'Les primes de parrainage seront envoyées dans ce salon'],
-    ['setupclassement', 'Installer le classement parrainage dans ce salon'],
-    ['setup', 'Créer les salons perso et donner le rôle à tous les membres'],
-  ]) {
-    await client.application.commands.create({ name, description, default_member_permissions: String(PermissionFlagsBits.ManageChannels) })
-      .catch(e => console.error(`Erreur commande ${name}:`, e.message));
-  }
-
-  await client.application.commands.create({
+// === COMMANDES ===
+const COMMANDES = [
+  { name: 'setupprime', description: 'Les primes de parrainage seront envoyées dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
+  { name: 'setupclassement', description: 'Installer le classement parrainage dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
+  { name: 'setup', description: 'Créer les salons perso et donner le rôle à tous les membres', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
+  { name: 'recruteur', description: 'Poster le message "Devenir recruteur" dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageChannels) },
+  {
+    name: 'setuprecruteur',
+    description: 'Régler le système recruteur de ce serveur',
+    default_member_permissions: String(PermissionFlagsBits.Administrator),
+    options: [
+      { type: 7, name: 'categorie', description: 'Catégorie où créer les salons des recruteurs', channel_types: [ChannelType.GuildCategory], required: true },
+      { type: 8, name: 'role', description: 'Rôle donné aux recruteurs', required: true },
+      { type: 7, name: 'explication', description: 'Salon explication', channel_types: [ChannelType.GuildText], required: true },
+      { type: 7, name: 'annonces', description: 'Salon annonces-à-poster', channel_types: [ChannelType.GuildText], required: true },
+      { type: 7, name: 'groupes', description: 'Salon groupe-recrutement', channel_types: [ChannelType.GuildText], required: true }
+    ]
+  },
+  {
     name: 'setupperso',
     description: 'Choisir la catégorie, le rôle et le salon de bienvenue',
     default_member_permissions: String(PermissionFlagsBits.Administrator),
@@ -109,15 +116,9 @@ client.once('ready', async () => {
       { type: 8, name: 'role', description: 'Rôle donné automatiquement aux nouveaux', required: true },
       { type: 7, name: 'bienvenue', description: 'Salon de bienvenue', channel_types: [ChannelType.GuildText], required: true }
     ]
-  }).catch(e => console.error('Erreur commande setupperso:', e.message));
-
-  await client.application.commands.create({
-    name: 'supprimer-salons',
-    description: 'Supprimer tous les salons perso et leurs catégories',
-    default_member_permissions: String(PermissionFlagsBits.Administrator)
-  }).catch(e => console.error('Erreur commande supprimer-salons:', e.message));
-
-  await client.application.commands.create({
+  },
+  { name: 'supprimer-salons', description: 'Supprimer tous les salons perso et leurs catégories', default_member_permissions: String(PermissionFlagsBits.Administrator) },
+  {
     name: 'send',
     description: 'Envoyer un message embed dans un salon',
     default_member_permissions: String(PermissionFlagsBits.ManageMessages),
@@ -125,14 +126,14 @@ client.once('ready', async () => {
       { type: 7, name: 'salon', description: 'Le salon où envoyer', channel_types: [ChannelType.GuildText], required: true },
       { type: 3, name: 'couleur', description: 'Couleur hex (#2ecc71)', required: false }
     ]
-  }).catch(e => console.error('Erreur commande send:', e.message));
+  },
+  { name: 'invite', description: 'Message "Qui t\'a invité ?" avec bouton', default_member_permissions: String(PermissionFlagsBits.ManageMessages) },
+];
 
-  await client.application.commands.create({
-    name: 'invite',
-    description: 'Message "Qui t\'a invité ?" avec bouton',
-    default_member_permissions: String(PermissionFlagsBits.ManageMessages)
-  }).catch(e => console.error('Erreur commande invite:', e.message));
-
+client.once('ready', async () => {
+  console.log(`Bot connecté en tant que ${client.user.tag}`);
+  // Remplace toutes les anciennes commandes par celles-ci
+  await client.application.commands.set(COMMANDES).catch(e => console.error('Erreur commandes:', e.message));
   console.log('Bot prêt.');
 });
 
@@ -173,12 +174,11 @@ async function findOrCreateCategory(guild, baseCategoryId) {
     if (guild.channels.cache.filter(c => c.parentId === cat.id).size < 20) return cat;
   }
 
-  const newCategory = await guild.channels.create({
+  return guild.channels.create({
     name: `${baseName} ${allCategories.size + 1}`,
     type: ChannelType.GuildCategory,
     position: baseCategory.position + allCategories.size
   });
-  return newCategory;
 }
 
 async function createPersoChannel(member) {
@@ -248,26 +248,37 @@ client.on('interactionCreate', async interaction => {
 
   // /setupperso
   if (interaction.isChatInputCommand() && interaction.commandName === 'setupperso') {
-    if (!PERSO_SERVEURS.includes(interaction.guild?.id) || !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: '❌ Commande réservée aux admins.', ephemeral: true });
+    if (!PERSO_SERVEURS.includes(interaction.guild?.id)) {
+      return interaction.reply({ content: '❌ Cette commande marche que sur Halo Agency et Instagram Come Back.', ephemeral: true });
     }
     const data = loadData();
     data.salons[interaction.guild.id] = data.salons[interaction.guild.id] || {};
     data.salons[interaction.guild.id].perso = {
       categoryId: interaction.options.getChannel('categorie').id,
       roleId: interaction.options.getRole('role').id,
-      welcomeId: interaction.options.getChannel('bienvenue').id,
-      lienNouveau: false
+      welcomeId: interaction.options.getChannel('bienvenue').id
     };
     saveData(data);
     return interaction.reply({ content: '✅ Réglé ! Les nouveaux auront leur rôle et leur salon perso. Fais /setup pour les membres déjà là.', ephemeral: true });
   }
 
+  // /setuprecruteur
+  if (interaction.isChatInputCommand() && interaction.commandName === 'setuprecruteur') {
+    const data = loadData();
+    data.salons[interaction.guild.id] = data.salons[interaction.guild.id] || {};
+    data.salons[interaction.guild.id].recru = {
+      categoryId: interaction.options.getChannel('categorie').id,
+      roleId: interaction.options.getRole('role').id,
+      explicationId: interaction.options.getChannel('explication').id,
+      annoncesId: interaction.options.getChannel('annonces').id,
+      groupesId: interaction.options.getChannel('groupes').id
+    };
+    saveData(data);
+    return interaction.reply({ content: '✅ Système recruteur réglé ! Maintenant fais /recruteur dans le salon devenir-recruteur.', ephemeral: true });
+  }
+
   // /setup
   if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
-    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-      return interaction.reply({ content: '❌ Tu n\'as pas la permission.', ephemeral: true });
-    }
     const conf = getPersoConf(interaction.guild.id);
     if (!conf) return interaction.reply({ content: '❌ Fais /setupperso d\'abord.', ephemeral: true });
 
@@ -326,9 +337,6 @@ client.on('interactionCreate', async interaction => {
 
   // /send
   if (interaction.isChatInputCommand() && interaction.commandName === 'send') {
-    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-      return interaction.reply({ content: '❌ Tu n\'as pas la permission.', ephemeral: true });
-    }
     const channel = interaction.options.getChannel('salon');
     const couleur = interaction.options.getString('couleur') || '#2ecc71';
     pendingMessages.set(interaction.user.id, { channelId: channel.id, couleur });
@@ -345,19 +353,141 @@ client.on('interactionCreate', async interaction => {
     if (!pending) return interaction.reply({ content: '❌ Erreur, réessaie /send', ephemeral: true });
     const message = interaction.fields.getTextInputValue('message_content');
     const channel = interaction.guild.channels.cache.get(pending.channelId);
-    if (!channel) { pendingMessages.delete(interaction.user.id); return interaction.reply({ content: '❌ Salon introuvable.', ephemeral: true }); }
+    pendingMessages.delete(interaction.user.id);
+    if (!channel) return interaction.reply({ content: '❌ Salon introuvable.', ephemeral: true });
     try {
       await channel.send({ embeds: [new EmbedBuilder().setDescription(message).setColor(pending.couleur)] });
       await interaction.reply({ content: `✅ Message envoyé dans ${channel}`, ephemeral: true });
     } catch { await interaction.reply({ content: `❌ Erreur d'envoi`, ephemeral: true }); }
-    pendingMessages.delete(interaction.user.id);
+  }
+
+  // /recruteur → message avec bouton
+  if (interaction.isChatInputCommand() && interaction.commandName === 'recruteur') {
+    if (!getRecruConf(interaction.guild.id)) {
+      return interaction.reply({ content: '❌ Fais /setuprecruteur d\'abord.', ephemeral: true });
+    }
+    const embed = new EmbedBuilder()
+      .setDescription(
+        '🎯 **Deviens recruteur !**\n\n' +
+        'Tu veux **gagner de l\'argent** en ramenant des VA ?\n\n' +
+        '💰 **0,50$** par VA ramené · **+2$** si ton VA est bon (s\'il produit)\n' +
+        'Aucun plafond — plus t\'en ramènes, plus tu gagnes.\n\n' +
+        '👇 Clique pour commencer !'
+      )
+      .setColor('#f1c40f');
+    const button = new ButtonBuilder().setCustomId('devenir_recruteur').setLabel('🚀 Devenir recruteur').setStyle(ButtonStyle.Success);
+    await interaction.channel.send({ embeds: [embed], components: [new ActionRowBuilder().addComponents(button)] });
+    await interaction.reply({ content: '✅ Message recruteur posté !', ephemeral: true });
+  }
+
+  // Bouton "Devenir recruteur"
+  if (interaction.isButton() && interaction.customId === 'devenir_recruteur') {
+    const member = interaction.member;
+    const guild = interaction.guild;
+    const config = getRecruConf(guild.id);
+    if (!config) return interaction.reply({ content: '❌ Système pas encore réglé, préviens un admin.', ephemeral: true });
+
+    if (member.roles.cache.has(config.roleId)) {
+      return interaction.reply({ content: '⚠️ Tu es déjà recruteur !', ephemeral: true });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      await member.roles.add(config.roleId);
+
+      const newChannel = await guild.channels.create({
+        name: `🎯-${member.user.username}`,
+        type: ChannelType.GuildText,
+        parent: config.categoryId,
+        permissionOverwrites: [
+          { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+          { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
+          { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+        ]
+      });
+
+      const embed1 = new EmbedBuilder()
+        .setDescription(
+          `👋 **Bienvenue ${member} !**\n\n` +
+          `Tu es maintenant **recruteur** 🎯\n\n` +
+          `Ton job : **ramener des VA via Telegram**\n\n` +
+          `💰 **0,50$** par VA ramené · **+2$** si ton VA est bon\n` +
+          `Aucun plafond — plus t'en ramènes, plus tu gagnes.`
+        )
+        .setColor('#2ecc71');
+      const btn1 = new ButtonBuilder().setCustomId('recru_step2').setLabel('C\'est parti ✅').setStyle(ButtonStyle.Success);
+
+      await newChannel.send({ embeds: [embed1], components: [new ActionRowBuilder().addComponents(btn1)] });
+      await interaction.editReply({ content: `✅ T'es recruteur ! Ton salon perso : ${newChannel}` });
+    } catch (error) {
+      console.error('Erreur recruteur:', error.message);
+      await interaction.editReply({ content: '❌ Erreur, contacte un admin.' });
+    }
+  }
+
+  // Étape 2
+  if (interaction.isButton() && interaction.customId === 'recru_step2') {
+    const embed2 = new EmbedBuilder()
+      .setDescription(
+        `📱 **Prépare ton Telegram**\n\n` +
+        `Il te faut un **compte Telegram propre** pour poster les annonces.\n\n` +
+        `❓ Un souci ? **Écris directement ici** — un manager te répond.\n\n` +
+        `Quand c'est bon 👇`
+      )
+      .setColor('#3498db');
+    const btn2 = new ButtonBuilder().setCustomId('recru_step3').setLabel('Mon Telegram est prêt ✅').setStyle(ButtonStyle.Success);
+    await interaction.update({ components: [] });
+    await interaction.channel.send({ embeds: [embed2], components: [new ActionRowBuilder().addComponents(btn2)] });
+  }
+
+  // Étape 3
+  if (interaction.isButton() && interaction.customId === 'recru_step3') {
+    const embed3 = new EmbedBuilder()
+      .setDescription(
+        `📩 **Envoie ton @Telegram**\n\n` +
+        `Dernière étape : envoie ton **@pseudo Telegram** — c'est comme ça qu'on te suit.\n\n` +
+        `⚠️ Tu es **bloqué** tant que tu l'as pas envoyé.`
+      )
+      .setColor('#e67e22');
+    const btn3 = new ButtonBuilder().setCustomId('recru_send_telegram').setLabel('📩 Envoyer mon @Telegram').setStyle(ButtonStyle.Success);
+    await interaction.update({ components: [] });
+    await interaction.channel.send({ embeds: [embed3], components: [new ActionRowBuilder().addComponents(btn3)] });
+  }
+
+  // Popup @Telegram
+  if (interaction.isButton() && interaction.customId === 'recru_send_telegram') {
+    const modal = new ModalBuilder().setCustomId('telegram_modal').setTitle('Ton @Telegram');
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId('telegram_pseudo').setLabel('Ton @pseudo Telegram').setStyle(TextInputStyle.Short).setPlaceholder('@monpseudo').setRequired(true)
+    ));
+    await interaction.showModal(modal);
+  }
+
+  // Étape 4 — final
+  if (interaction.isModalSubmit() && interaction.customId === 'telegram_modal') {
+    const pseudo = interaction.fields.getTextInputValue('telegram_pseudo');
+    const conf = getRecruConf(interaction.guild.id) || {};
+
+    await interaction.reply({ embeds: [new EmbedBuilder().setDescription(`✅ Telegram enregistré : **${pseudo}**`).setColor('#2ecc71')] });
+
+    const finalEmbed = new EmbedBuilder()
+      .setDescription(
+        `🎉 **T'es enregistré comme recruteur !**\n\n` +
+        `Voici **TOUT** pour commencer — dans l'ordre :\n\n` +
+        `1️⃣ **Regarde la vidéo** → <#${conf.explicationId}>\n` +
+        `2️⃣ **Copie ton annonce** → <#${conf.annoncesId}>\n` +
+        `3️⃣ **Poste-la** dans les groupes → <#${conf.groupesId}> (Facebook + Telegram)\n` +
+        `4️⃣ Dis à chaque VA de mettre **ton nom** dans le salon **qui-t-a-invité**\n\n` +
+        `💰 Chaque VA ramené = **0,50$** (+2$ s'il produit) · aucun plafond\n\n` +
+        `**Ramène du monde, encaisse. Let's go 🔥**`
+      )
+      .setColor('#f1c40f');
+    await interaction.channel.send({ embeds: [finalEmbed] });
   }
 
   // /invite
   if (interaction.isChatInputCommand() && interaction.commandName === 'invite') {
-    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-      return interaction.reply({ content: '❌ Tu n\'as pas la permission.', ephemeral: true });
-    }
     const PRIME = primePour(interaction.guild.id);
     const embed = new EmbedBuilder()
       .setDescription(`🤝 **Qui t'a invité ?**\n\nBienvenue ! 👋\n\nSi quelqu'un t'a fait venir ici, clique le bouton et **choisis son nom**.\nÇa lui fait gagner **${PRIME}$** 💰 (une seule fois !)\n\n👇 Clique pour indiquer qui t'a invité !`)
@@ -419,9 +549,6 @@ client.on('interactionCreate', async interaction => {
 
   // /setupprime et /setupclassement
   if (interaction.isChatInputCommand() && (interaction.commandName === 'setupprime' || interaction.commandName === 'setupclassement')) {
-    if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
-      return interaction.reply({ content: '❌ Tu n\'as pas la permission.', ephemeral: true });
-    }
     const data = loadData();
     data.salons[interaction.guild.id] = data.salons[interaction.guild.id] || {};
     if (interaction.commandName === 'setupprime') {
