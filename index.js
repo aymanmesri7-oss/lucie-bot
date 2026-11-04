@@ -45,18 +45,15 @@ function statsParrain(data, parrainId, guildId) {
   return { count: mine.length, gains: mine.reduce((t, i) => t + i.gain, 0) };
 }
 
-// Salon perso OU salon recruteur du parrain, sur n'importe quel serveur
-async function findSalonParrain(guildActuel, parrainId) {
-  const guilds = [guildActuel, ...client.guilds.cache.filter(g => g.id !== guildActuel.id).values()];
-  for (const g of guilds) {
-    const recru = getRecruConf(g.id);
-    const catIds = [...(getPersoConf(g.id) ? getPersoCategoryIds(g) : []), ...(recru ? [recru.categoryId] : [])];
-    const salon = g.channels.cache.find(c =>
-      c.type === ChannelType.GuildText && catIds.includes(c.parentId) && c.permissionOverwrites.cache.has(parrainId)
-    );
-    if (salon) return salon;
-  }
-  return null;
+// Salon perso (📸) ou recruteur (🎯) DU parrain, sur CE serveur seulement.
+// On vérifie le nom du salon : le manager a accès à tous les salons perso, la permission seule ne suffit pas.
+async function findSalonParrain(guild, parrain) {
+  const recru = getRecruConf(guild.id);
+  const catIds = [...(getPersoConf(guild.id) ? getPersoCategoryIds(guild) : []), ...(recru ? [recru.categoryId] : [])];
+  const nom = clean(parrain.username);
+  return guild.channels.cache.find(c =>
+    c.type === ChannelType.GuildText && catIds.includes(c.parentId) && clean(c.name) === nom
+  ) || null;
 }
 
 async function updateClassementParrainage(guild, data) {
@@ -578,11 +575,13 @@ client.on('interactionCreate', async interaction => {
     await interaction.update({ content: `✅ **${parrain.username}** a été notifié ! Merci 🤝`, components: [] });
 
     try {
-      const salonPerso = await findSalonParrain(guild, parrain.id);
+      const salonPerso = await findSalonParrain(guild, parrain);
       if (salonPerso) {
         await salonPerso.send({ content: `<@${parrain.id}>`, embeds: [new EmbedBuilder()
           .setDescription(`🎉 **${va} t'a désigné comme parrain !**\n\n💰 **+${PRIME}$** pour toi\n\n📊 **Ton total :**\n• Personnes invitées : **${count}**\n• Gains : **${gains.toFixed(2)}$**\n\n🔥 Continue, chaque personne = **${PRIME}$** de plus !`)
-          .setColor('#2ecc71'), embedMesParrainages(salonPerso.guild, parrain.id)], components: [boutonParrainages()] });
+          .setColor('#2ecc71'), embedMesParrainages(guild, parrain.id)], components: [boutonParrainages()] });
+      } else {
+        console.log(`${parrain.username} n'a pas de salon perso sur ${guild.name}`);
       }
     } catch (e) { console.error('Erreur notif parrain:', e.message); }
 
