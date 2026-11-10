@@ -165,6 +165,7 @@ const COMMANDES = [
     default_member_permissions: String(PermissionFlagsBits.ManageMessages),
     options: [{ type: 3, name: 'lien', description: 'Le lien du VA', required: true }]
   },
+  { name: 'setupformation', description: 'Créer le rôle En formation : les nouveaux voient que leur salon perso', default_member_permissions: String(PermissionFlagsBits.Administrator) },
 ];
 
 client.once('ready', async () => {
@@ -226,37 +227,66 @@ const SALON_PUBLIER = '1566540448233820200';
 const REGARDE = '🎥 **REGARDE LA VIDÉO** 👇';
 const BOUTON_VERT = '✅ **PUIS APPUIE SUR LE BOUTON VERT**';
 
-// Chaque étape : la vidéo (dossier videos/), le texte, le bouton qui mène à l'étape suivante
+const NE_PUBLIE_RIEN = '⛔ **NE PUBLIE RIEN**';
+
+// Chaque étape : la vidéo (dossier videos/), la couleur, le texte, le bouton qui mène à l'étape suivante
 const ETAPES = {
-  1: { video: 'bienvenue', lignes: () => ['# 👋 BIENVENUE !', REGARDE, BOUTON_VERT], bouton: "J'AI REGARDÉ ✅" },
-  2: { video: 'creer', lignes: () => [
-    '# 📱 CRÉE TON COMPTE INSTAGRAM', REGARDE,
-    `👉 **COMMENT FAIRE** → <#${SALON_CREER}>`,
-    `👀 **TON COMPTE DOIT ÊTRE COMME ÇA** → <#${SALON_EXEMPLE}>`,
-    '✅ **FINI ? APPUIE SUR LE BOUTON VERT**'
+  1: { video: 'bienvenue', couleur: '#2ecc71', lignes: () => ['# 👋 BIENVENUE !', REGARDE, BOUTON_VERT], bouton: "J'AI REGARDÉ ✅" },
+  2: { video: 'creer', couleur: '#3498db', lignes: () => [
+    '# 📱 CRÉE TON PREMIER COMPTE INSTAGRAM', REGARDE,
+    `1️⃣ **REGARDE LE TUTO ICI** → <#${SALON_CREER}>`,
+    `2️⃣ **TON COMPTE DOIT ÊTRE COMME ÇA** → <#${SALON_EXEMPLE}>`,
+    NE_PUBLIE_RIEN,
+    '📩 **ENVOIE SEULEMENT LE LIEN DE TON COMPTE ICI**',
+    '✅ **COMPTE CRÉÉ ? APPUIE SUR LE BOUTON VERT**'
   ], bouton: "J'AI CRÉÉ MON COMPTE ✅" },
-  3: { video: 'envoyer', lignes: () => ['# 📩 ENVOIE LE LIEN DE TON COMPTE ICI', REGARDE] },
-  4: { lignes: () => ['# ✅ BRAVO ! COMPTE REÇU', '⛔ **NE PUBLIE RIEN**', '⏳ **ATTENDS TON LIEN ICI**', `🔔 <@${MANAGER_ID}>`] },
-  5: { video: 'publier', lignes: lien => [
+  3: { video: 'envoyer', couleur: '#e67e22', lignes: () => ['# 📩 ENVOIE LE LIEN DE TON COMPTE ICI', REGARDE, NE_PUBLIE_RIEN] },
+  4: { couleur: '#e74c3c', pingBoss: true, lignes: () => [
+    '# ✅ BRAVO ! COMPTE REÇU',
+    '⏳ **ATTENDS TON LIEN ICI**',
+    '💰 **C\'EST AVEC CE LIEN QUE TU GAGNES DES CLICS**',
+    NE_PUBLIE_RIEN
+  ] },
+  5: { video: 'publier', couleur: '#f1c40f', lignes: lien => [
     '# 🔗 VOICI TON LIEN', lien, REGARDE,
     `👉 **COMMENT PUBLIER** → <#${SALON_PUBLIER}>`, BOUTON_VERT
   ], bouton: "J'AI COMPRIS ✅" },
-  6: { video: 'routine', lignes: () => ['# 📅 TON TRAVAIL DE TOUS LES JOURS', REGARDE, '💬 **UNE QUESTION ? ÉCRIS ICI**'] }
+  6: { video: 'routine', couleur: '#9b59b6', lignes: () => [
+    '# 📅 TON TRAVAIL DE TOUS LES JOURS', REGARDE,
+    '🔥 **CRÉE LE PLUS DE COMPTES POSSIBLE CHAQUE JOUR**',
+    '📩 **ENVOIE CHAQUE COMPTE ICI**',
+    '💬 **UNE QUESTION ? ÉCRIS ICI**'
+  ] }
 };
 
-function etapeTunnel(n, lien) {
+// Envoie l'étape : un cadre de couleur avec le texte, puis la vidéo et le bouton vert juste en dessous
+async function envoyerEtape(channel, n, lien) {
   const e = ETAPES[n];
   const fichier = e.video && path.join(__dirname, 'videos', `${e.video}.mp4`);
   // Discord refuse les fichiers de plus de 10 Mo envoyés par un bot
   const aVideo = fichier && fs.existsSync(fichier) && fs.statSync(fichier).size <= 10 * 1024 * 1024;
   if (e.video && !aVideo) console.error(`Vidéo manquante ou trop lourde (max 10 Mo) : videos/${e.video}.mp4`);
-  return {
-    content: e.lignes(lien).filter(l => aVideo || l !== REGARDE).join('\n\n'),
-    files: aVideo ? [fichier] : [],
-    components: e.bouton ? [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`tunnel_${n + 1}`).setLabel(e.bouton).setStyle(ButtonStyle.Success)
-    )] : []
-  };
+  const bouton = e.bouton ? [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`tunnel_${n + 1}`).setLabel(e.bouton).setStyle(ButtonStyle.Success)
+  )] : [];
+  // Étape 4 : on prévient le rôle BOSS (ou le manager si le rôle n'existe pas)
+  const boss = e.pingBoss && channel.guild.roles.cache.find(r => r.name.toUpperCase().includes('BOSS'));
+  await channel.send({
+    content: e.pingBoss ? (boss ? `${boss}` : `<@${MANAGER_ID}>`) : undefined,
+    embeds: [new EmbedBuilder().setColor(e.couleur).setDescription(e.lignes(lien).filter(l => aVideo || l !== REGARDE).join('\n\n'))],
+    components: aVideo ? [] : bouton
+  });
+  if (aVideo) await channel.send({ files: [fichier], components: bouton });
+}
+
+// Fin de l'étape 1 : on enlève "En formation" et on donne le rôle normal → tout le serveur s'ouvre
+async function finirFormation(channel) {
+  const conf = loadData().salons[channel.guild.id];
+  const va = channel.permissionOverwrites.cache.find(o => o.type === 1 && o.id !== client.user.id && o.id !== MANAGER_ID);
+  const member = va && await channel.guild.members.fetch(va.id).catch(() => null);
+  if (!member || !conf?.formationRole) return;
+  if (conf.perso?.roleId) await member.roles.add(conf.perso.roleId).catch(e => console.error('Erreur rôle:', e.message));
+  await member.roles.remove(conf.formationRole).catch(e => console.error('Erreur rôle formation:', e.message));
 }
 
 // Salons où Lucie attend le lien Instagram du VA (étape 3)
@@ -272,7 +302,7 @@ client.on('messageCreate', async message => {
     if (message.author.bot || !/instagram\.com/i.test(message.content)) return;
     if (!loadData().tunnel?.[message.channel.id]) return;
     attendCompte(message.channel.id, false);
-    await message.channel.send(etapeTunnel(4));
+    await envoyerEtape(message.channel, 4);
   } catch (e) { console.error('Erreur tunnel:', e.message); }
 });
 
@@ -301,7 +331,7 @@ async function createPersoChannel(member) {
     ]
   });
 
-  if (guild.id === HALO_GUILD_ID) { await newChannel.send(etapeTunnel(1)); return newChannel; }
+  if (guild.id === HALO_GUILD_ID) { await envoyerEtape(newChannel, 1); return newChannel; }
 
   await newChannel.send({ embeds: [new EmbedBuilder()
     .setDescription(
@@ -323,7 +353,9 @@ client.on('guildMemberAdd', async member => {
     const conf = getPersoConf(member.guild.id);
     if (!conf) { console.error(`/setupperso pas encore fait sur ${member.guild.name}`); return; }
 
-    await member.roles.add(conf.roleId).catch(e => console.error('Erreur rôle auto:', e.message));
+    // Sur Halo, si /setupformation est fait : rôle "En formation" (il voit que son salon perso)
+    const formationRole = member.guild.id === HALO_GUILD_ID && loadData().salons[member.guild.id]?.formationRole;
+    await member.roles.add(formationRole || conf.roleId).catch(e => console.error('Erreur rôle auto:', e.message));
 
     const salon = await member.guild.channels.fetch(conf.welcomeId).catch(() => null);
     if (salon) {
@@ -346,19 +378,42 @@ client.on('interactionCreate', async interaction => {
   // Tunnel : /tunnel, /lien et boutons verts
   if (interaction.isChatInputCommand() && interaction.commandName === 'tunnel') {
     await interaction.reply({ content: '✅ Formation lancée ici.', ephemeral: true });
-    return interaction.channel.send(etapeTunnel(1));
+    return envoyerEtape(interaction.channel, 1);
   }
   if (interaction.isChatInputCommand() && interaction.commandName === 'lien') {
     await interaction.reply({ content: '✅ Lien envoyé.', ephemeral: true });
     attendCompte(interaction.channel.id, false);
-    return interaction.channel.send(etapeTunnel(5, interaction.options.getString('lien')));
+    return envoyerEtape(interaction.channel, 5, interaction.options.getString('lien'));
   }
   if (interaction.isButton() && interaction.customId.startsWith('tunnel_')) {
     const n = Number(interaction.customId.split('_')[1]);
     if (!ETAPES[n]) return;
     await interaction.update({ components: [] });
     if (n === 3) attendCompte(interaction.channel.id, true);
-    return interaction.channel.send(etapeTunnel(n));
+    if (n === 2) await finirFormation(interaction.channel);
+    return envoyerEtape(interaction.channel, n);
+  }
+
+  // /setupformation : rôle "En formation" caché de tout sauf des salons perso
+  if (interaction.isChatInputCommand() && interaction.commandName === 'setupformation') {
+    await interaction.deferReply({ ephemeral: true });
+    const guild = interaction.guild;
+    const data = loadData();
+    const conf = data.salons[guild.id] = data.salons[guild.id] || {};
+    let role = conf.formationRole && await guild.roles.fetch(conf.formationRole).catch(() => null);
+    if (!role) {
+      role = await guild.roles.create({ name: '⏳ En formation' });
+      conf.formationRole = role.id;
+      saveData(data);
+    }
+    await guild.channels.fetch();
+    const perso = getPersoCategoryIds(guild);
+    let ok = 0, erreurs = 0;
+    for (const [, ch] of guild.channels.cache) {
+      if (perso.includes(ch.id) || perso.includes(ch.parentId) || !ch.permissionOverwrites) continue;
+      try { await ch.permissionOverwrites.edit(role, { ViewChannel: false }); ok++; } catch { erreurs++; }
+    }
+    return interaction.editReply({ content: `✅ Rôle **${role.name}** prêt : caché de **${ok}** salons.` + (erreurs ? `\n⚠️ ${erreurs} salons pas modifiés (Lucie ne les voit pas)` : '') + `\n\n👉 Si tu crées un nouveau salon plus tard, refais /setupformation.` });
   }
 
   // /setupperso
