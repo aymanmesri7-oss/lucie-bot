@@ -158,6 +158,13 @@ const COMMANDES = [
     ]
   },
   { name: 'invite', description: 'Message "Qui t\'a invité ?" avec bouton', default_member_permissions: String(PermissionFlagsBits.ManageMessages) },
+  { name: 'tunnel', description: 'Lancer la formation (étape 1) dans ce salon', default_member_permissions: String(PermissionFlagsBits.ManageMessages) },
+  {
+    name: 'lien',
+    description: 'Donner son lien au VA dans ce salon (lance la suite de la formation)',
+    default_member_permissions: String(PermissionFlagsBits.ManageMessages),
+    options: [{ type: 3, name: 'lien', description: 'Le lien du VA', required: true }]
+  },
 ];
 
 client.once('ready', async () => {
@@ -211,6 +218,64 @@ async function findOrCreateCategory(guild, baseCategoryId) {
   });
 }
 
+// === TUNNEL DE FORMATION (Halo Agency) ===
+const MANAGER_ID = '977960166945325106';
+const SALON_CREER = '1566540448233820198';
+const SALON_EXEMPLE = '1566540448540008520';
+const SALON_PUBLIER = '1566540448233820200';
+const REGARDE = '🎥 **REGARDE LA VIDÉO** 👇';
+const BOUTON_VERT = '✅ **PUIS APPUIE SUR LE BOUTON VERT**';
+
+// Chaque étape : la vidéo (dossier videos/), le texte, le bouton qui mène à l'étape suivante
+const ETAPES = {
+  1: { video: 'bienvenue', lignes: () => ['# 👋 BIENVENUE !', REGARDE, BOUTON_VERT], bouton: "J'AI REGARDÉ ✅" },
+  2: { video: 'creer', lignes: () => [
+    '# 📱 CRÉE TON COMPTE INSTAGRAM', REGARDE,
+    `👉 **COMMENT FAIRE** → <#${SALON_CREER}>`,
+    `👀 **TON COMPTE DOIT ÊTRE COMME ÇA** → <#${SALON_EXEMPLE}>`,
+    '✅ **FINI ? APPUIE SUR LE BOUTON VERT**'
+  ], bouton: "J'AI CRÉÉ MON COMPTE ✅" },
+  3: { video: 'envoyer', lignes: () => ['# 📩 ENVOIE LE LIEN DE TON COMPTE ICI', REGARDE] },
+  4: { lignes: () => ['# ✅ BRAVO ! COMPTE REÇU', '⛔ **NE PUBLIE RIEN**', '⏳ **ATTENDS TON LIEN ICI**', `🔔 <@${MANAGER_ID}>`] },
+  5: { video: 'publier', lignes: lien => [
+    '# 🔗 VOICI TON LIEN', lien, REGARDE,
+    `👉 **COMMENT PUBLIER** → <#${SALON_PUBLIER}>`, BOUTON_VERT
+  ], bouton: "J'AI COMPRIS ✅" },
+  6: { video: 'routine', lignes: () => ['# 📅 TON TRAVAIL DE TOUS LES JOURS', REGARDE, '💬 **UNE QUESTION ? ÉCRIS ICI**'] }
+};
+
+function etapeTunnel(n, lien) {
+  const e = ETAPES[n];
+  const fichier = e.video && path.join(__dirname, 'videos', `${e.video}.mp4`);
+  // Discord refuse les fichiers de plus de 10 Mo envoyés par un bot
+  const aVideo = fichier && fs.existsSync(fichier) && fs.statSync(fichier).size <= 10 * 1024 * 1024;
+  if (e.video && !aVideo) console.error(`Vidéo manquante ou trop lourde (max 10 Mo) : videos/${e.video}.mp4`);
+  return {
+    content: e.lignes(lien).filter(l => aVideo || l !== REGARDE).join('\n\n'),
+    files: aVideo ? [fichier] : [],
+    components: e.bouton ? [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`tunnel_${n + 1}`).setLabel(e.bouton).setStyle(ButtonStyle.Success)
+    )] : []
+  };
+}
+
+// Salons où Lucie attend le lien Instagram du VA (étape 3)
+function attendCompte(channelId, attend) {
+  const data = loadData();
+  data.tunnel = data.tunnel || {};
+  if (attend) data.tunnel[channelId] = true; else delete data.tunnel[channelId];
+  saveData(data);
+}
+
+client.on('messageCreate', async message => {
+  try {
+    if (message.author.bot || !/instagram\.com/i.test(message.content)) return;
+    if (!loadData().tunnel?.[message.channel.id]) return;
+    attendCompte(message.channel.id, false);
+    await message.channel.send(etapeTunnel(4));
+  } catch (e) { console.error('Erreur tunnel:', e.message); }
+});
+
 async function createPersoChannel(member) {
   const guild = member.guild;
   const conf = getPersoConf(guild.id);
@@ -231,10 +296,12 @@ async function createPersoChannel(member) {
     permissionOverwrites: [
       { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
       { id: member.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] },
-      { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+      { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.AttachFiles] },
       ...(manager ? [{ id: manager.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] }] : [])
     ]
   });
+
+  if (guild.id === HALO_GUILD_ID) { await newChannel.send(etapeTunnel(1)); return newChannel; }
 
   await newChannel.send({ embeds: [new EmbedBuilder()
     .setDescription(
@@ -275,6 +342,24 @@ client.on('guildMemberAdd', async member => {
 });
 
 client.on('interactionCreate', async interaction => {
+
+  // Tunnel : /tunnel, /lien et boutons verts
+  if (interaction.isChatInputCommand() && interaction.commandName === 'tunnel') {
+    await interaction.reply({ content: '✅ Formation lancée ici.', ephemeral: true });
+    return interaction.channel.send(etapeTunnel(1));
+  }
+  if (interaction.isChatInputCommand() && interaction.commandName === 'lien') {
+    await interaction.reply({ content: '✅ Lien envoyé.', ephemeral: true });
+    attendCompte(interaction.channel.id, false);
+    return interaction.channel.send(etapeTunnel(5, interaction.options.getString('lien')));
+  }
+  if (interaction.isButton() && interaction.customId.startsWith('tunnel_')) {
+    const n = Number(interaction.customId.split('_')[1]);
+    if (!ETAPES[n]) return;
+    await interaction.update({ components: [] });
+    if (n === 3) attendCompte(interaction.channel.id, true);
+    return interaction.channel.send(etapeTunnel(n));
+  }
 
   // /setupperso
   if (interaction.isChatInputCommand() && interaction.commandName === 'setupperso') {
