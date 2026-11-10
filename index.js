@@ -373,6 +373,39 @@ client.on('guildMemberAdd', async member => {
   }
 });
 
+// === DÉPART : on supprime son salon perso et on prévient les BOSS en privé s'il avait un lien GetMySocial ===
+client.on('guildMemberRemove', async member => {
+  try {
+    const guild = member.guild;
+    if (!PERSO_SERVEURS.includes(guild.id)) return;
+    await guild.channels.fetch();
+    const salon = findPersoChannel(guild, { id: member.id, user: { username: member.user?.username || '' } });
+    if (!salon) return;
+
+    // Liens GetMySocial envoyés dans son salon (messages et cadres de Lucie)
+    const messages = await salon.messages.fetch({ limit: 100 }).catch(() => null);
+    const textes = messages ? [...messages.values()].flatMap(m => [m.content, ...m.embeds.map(e => e.description || '')]) : [];
+    const liens = [...new Set(textes.join(' ').match(/https?:\/\/(www\.)?getmysocial\.com\/[^\s)>*]+/gi) || [])];
+
+    if (liens.length) {
+      await guild.members.fetch();
+      const boss = guild.roles.cache.find(r => r.name.toUpperCase().includes('BOSS'));
+      for (const [, b] of boss?.members || []) {
+        if (b.user.bot) continue;
+        await b.send({ embeds: [new EmbedBuilder()
+          .setTitle('🚪 UN VA A QUITTÉ LE SERVEUR')
+          .setDescription(`👤 **${member.user?.username || member.id}** a quitté **${guild.name}**\n\n🗑️ **Supprime son lien GetMySocial :**\n${liens.join('\n')}`)
+          .setColor('#e74c3c').setTimestamp()] }).catch(() => console.log(`MP impossible à ${b.user.username}`));
+      }
+    }
+
+    const data = loadData();
+    if (data.tunnel?.[salon.id]) { delete data.tunnel[salon.id]; saveData(data); }
+    await salon.delete('Le VA a quitté le serveur');
+    console.log(`Salon perso de ${member.user?.username} supprimé (départ)`);
+  } catch (e) { console.error('Erreur départ:', e.message); }
+});
+
 client.on('interactionCreate', async interaction => {
 
   // Tunnel : /tunnel, /lien et boutons verts
