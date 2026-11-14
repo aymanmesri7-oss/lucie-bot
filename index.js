@@ -20,6 +20,7 @@ const pendingMessages = new Map();
 // === SERVEURS SALONS PERSO ===
 const HALO_GUILD_ID = '1566540447487099041';
 const COMEBACK_GUILD_ID = '1566758699685515285';
+const TWITTER_GUILD_ID = '1570944449658224691';
 
 // === SAUVEGARDE ===
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
@@ -176,7 +177,7 @@ client.once('ready', async () => {
 });
 
 // === SALONS PERSO ===
-const PERSO_SERVEURS = [HALO_GUILD_ID, COMEBACK_GUILD_ID];
+const PERSO_SERVEURS = [HALO_GUILD_ID, COMEBACK_GUILD_ID, TWITTER_GUILD_ID];
 const getPersoConf = guildId =>
   PERSO_SERVEURS.includes(guildId) ? loadData().salons[guildId]?.perso : undefined;
 
